@@ -1,0 +1,334 @@
+package Audio::MadJACK;
+
+################
+#
+# MadJACK: perl control interface
+#
+# Copyright 2005 Nicholas J. Humfrey <njh@aelius.com>
+#
+
+use Carp;
+
+use Net::LibLO;
+use strict;
+
+use vars qw/$VERSION/;
+
+$VERSION="0.01";
+
+
+sub new {
+    my $class = shift;
+    
+    croak( "Missing MadJACK server port or URL" ) if (scalar(@_)<1);
+
+    # Bless the hash into an object
+    my $self = { 
+    	pong => 0,
+    	state => undef,
+    	position => undef,
+    	filename => undef,
+    	filepath => undef
+    };
+    bless $self, $class;
+
+    # Create address of MadJACK server
+    $self->{addr} = new Net::LibLO::Address( @_ );
+    if (!defined $self->{addr}) {
+    	carp("Error creating Net::LibLO::Address");
+    	return undef;
+    }
+        
+    # Create new LibLO instance
+    $self->{lo} = new Net::LibLO();
+    if (!defined $self->{lo}) {
+    	carp("Error creating Net::LibLO");
+    	return undef;
+    }
+    
+    # Add reply handlers
+    $self->{lo}->add_method( '/deck/state', 's', \&_state_handler, $self );
+    $self->{lo}->add_method( '/deck/position', 'd', \&_position_handler, $self );
+    $self->{lo}->add_method( '/deck/filename', 's', \&_filename_handler, $self );
+    $self->{lo}->add_method( '/deck/filepath', 's', \&_filepath_handler, $self );
+    $self->{lo}->add_method( '/pong', '', \&_pong_handler, $self );
+    
+    # Check MadJACK server is there
+    if (!$self->ping()) {
+    	carp("MadJACK server is not responding");
+    	return undef;
+    }
+
+   	return $self;
+}
+
+sub load {
+	my $self=shift;
+	my ($filename) = @_;
+	return $self->{lo}->send( $self->{addr}, '/deck/load', 's', $filename );
+}
+
+
+sub play {
+	my $self=shift;
+	return $self->{lo}->send( $self->{addr}, '/deck/play', '' );
+}
+
+sub pause {
+	my $self=shift;
+	return $self->{lo}->send( $self->{addr}, '/deck/pause', '' );
+}
+
+sub stop {
+	my $self=shift;
+	return $self->{lo}->send( $self->{addr}, '/deck/stop', '' );
+}
+
+sub cue {
+	my $self=shift;
+	return $self->{lo}->send( $self->{addr}, '/deck/cue', '' );
+}
+
+sub eject {
+	my $self=shift;
+	return $self->{lo}->send( $self->{addr}, '/deck/eject', '' );
+}
+
+
+sub get_state {
+	my $self=shift;
+	$self->{state} = undef;
+	$self->_wait_reply( '/deck/get_state' );
+	return $self->{state};
+}
+
+sub _state_handler {
+	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
+	$userdata->{state}=$params[0];
+	return 0; # Success
+}
+
+sub get_position {
+	my $self=shift;
+	$self->{postion} = undef;
+	$self->_wait_reply( '/deck/get_position' );
+	return $self->{position};
+}
+
+sub _position_handler {
+	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
+	$userdata->{position}=$params[0];
+	return 0; # Success
+}
+
+sub get_filename {
+	my $self=shift;
+	$self->{filename} = undef;
+	$self->_wait_reply( '/deck/get_filename' );
+	return $self->{filename};
+}
+
+sub _filename_handler {
+	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
+	$userdata->{filename}=$params[0];
+	return 0; # Success
+}
+
+sub get_filepath {
+	my $self=shift;
+	$self->{filepath} = undef;
+	$self->_wait_reply( '/deck/get_filepath' );
+	return $self->{filepath};
+}
+
+sub _filepath_handler {
+	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
+	$userdata->{filepath}=$params[0];
+	return 0; # Success
+}
+
+sub ping {
+	my $self=shift;
+	$self->{pong} = 0;
+	$self->_wait_reply( '/ping' );
+	return $self->{pong};
+}
+
+sub _pong_handler {
+	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
+	$userdata->{pong}++;
+	return 0; # Success
+}
+
+sub get_url {
+	my $self=shift;
+	return $self->{addr}->get_url();
+}
+
+sub _wait_reply {
+	my $self=shift;
+	my ($path) = @_;
+	my $attempts = 4;
+	my $bytes = 0;
+
+	# Try a few times
+	for(1..$attempts) {
+	
+		# Send Query
+		my $result = $self->{lo}->send( $self->{addr}, $path, '' );
+		if ($result<1) {
+			warn "Failed to send message ($path): ".$self->{addr}->errstr()."\n";
+			sleep(1);
+			next;
+		}
+
+		# Wait for reply within one second
+		$bytes = $self->{lo}->recv_noblock( 1000 );
+		if ($bytes<1) {
+			warn "Timed out waiting for reply after one second.\n";
+		} else { last; }
+	}
+	
+	# Failed to get reply ?
+	if ($bytes<1) {
+		warn "Failed to get reply from MadJACK server after $attempts attempts.\n";
+	}
+	
+	return $bytes;
+}
+
+
+1;
+
+__END__
+
+=pod
+
+=head1 NAME
+
+Audio::MadJACK - Talk to MadJACK server using Object Oriented Perl
+
+=head1 SYNOPSIS
+
+  use Audio::MadJACK;
+
+  my $mj = new Audio::MadJACK( 'osc.udp://madjack.example.net/' );
+  $mj->load( 'Playlist_A/mymusic.mp3' );
+  $mj->play();
+
+
+=head1 DESCRIPTION
+
+The Audio::MadJACK module uses Net::LibLO to talk to a 
+MadJACK (MPEG Audio Deck) server. It has an Object Oriented style 
+API making it simple to control multiple decks from a single script.
+
+
+=over 4
+
+=item B<new( oscurl )>
+
+Connect to MadJACK deck specified by C<oscurl>.
+A ping is sent to the MadJACK deck to check to see if it is there.
+If a reply is not recieved or there was an error then C<undef> is returned.
+
+=item B<load( filename )>
+
+Send a message to the deck requesting that C<filename> is loaded.
+Note: it is up to the developer to check to see if the file was 
+successfully loaded, by calling the C<get_state()> method.
+
+=item B<play()>
+
+Tell the deck to start playing the current track.
+
+=item B<pause()>
+
+Tell the deck to pause the current track.
+
+=item B<stop()>
+
+Tell the deck to stop decoding and playback of the current track.
+
+=item B<cue()>
+
+Tell the deck to start decoding from the cue point.
+
+=item B<eject()>
+
+Close the currect track loaded.
+
+=item B<get_state()>
+
+Returns the current state of the MadJACK deck.
+Returns one of the following strings:
+
+   - PLAYING
+   - PAUSED
+   - READY
+   - LOADING
+   - STOPPED
+   - EMPTY
+   
+If no reply if received from the server or there is an error then 
+C<undef> is returned.
+
+=item B<get_position()>
+
+Returns the deck's position (in seconds) in the current track. 
+   
+If no reply if received from the server or there is an error then 
+C<undef> is returned.
+
+=item B<get_filename()>
+
+Returns the filename of the track currently loaded in the deck.
+The filename is stripped of its path and suffix.
+
+If no track is currently loaded then an empty string is returned.
+If no reply if received from the server or there is an error then 
+C<undef> is returned.
+
+=item B<get_filepath()>
+
+Returns the full file path of the track currently loaded in the deck.
+
+If no track is currently loaded then an empty string is returned.
+If no reply if received from the server or there is an error then 
+C<undef> is returned.
+
+=item B<ping()>
+
+Pings the remote deck to see if it is there.
+
+Returns 1 if the server responds, or 0 if there is no reply.
+
+=item B<get_url()>
+
+Returns the OSC URL of the MadJACK deck.
+
+=head1 SEE ALSO
+
+L<Net::LibLO>
+
+L<http://www.ecs.soton.ac.uk/~njh/madjack/>
+
+=head1 AUTHOR
+
+Nicholas J. Humfrey <njh@aelius.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2005 Nicholas J. Humfrey
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+=cut
