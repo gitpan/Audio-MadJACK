@@ -8,6 +8,7 @@
 
 use Audio::MadJACK;
 use Term::ReadKey;
+use POSIX qw/floor/;
 use strict;
 
 # Create MadJACK object for talking to the deck
@@ -16,7 +17,10 @@ exit(-1) unless (defined $madjack);
 
 # Display the URL of the MadJACK deck we connected to
 print "URL of madjack server: ".$madjack->get_url()."\n";
+print "MadJACK server version: ".$madjack->get_version()."\n";
 
+
+my $duration = $madjack->get_duration();
 
 # Change terminal mode
 ReadMode(3);
@@ -36,17 +40,23 @@ while( $running ) {
 		} elsif ($key eq 'l') {
 			ReadMode(0);
 			print "Enter name of file to load: ";
-			my $filename = <STDIN>;
-			chomp($filename);
-			$madjack->load( $filename );
+			my $filepath = <STDIN>;
+			chomp($filepath);
+			$madjack->load( $filepath );
 			ReadMode(3);
 		} elsif ($key eq 's') {
 			$madjack->stop()
 		} elsif ($key eq 'f') {
-			print "Filename: ".$madjack->get_filename();
-			print " (".$madjack->get_filepath().")\n";
+			print "Filepath: ".$madjack->get_filepath()."\n";
 		} elsif ($key eq 'c') {
 			$madjack->cue()
+		} elsif ($key eq 'C') {
+			ReadMode(0);
+			print "Enter cue point (in seconds): ";
+			my $cuepoint = <STDIN>;
+			chomp($cuepoint);
+			$madjack->cue( $cuepoint );
+			ReadMode(3);
 		} elsif ($key eq 'e') {
 			$madjack->eject()
 		} elsif ($key eq 'p') {
@@ -55,14 +65,26 @@ while( $running ) {
 		} else {
 			warn "Unknown key command ('$key')\n";
 		}
+		
+		$duration = $madjack->get_duration();
 	}
 	
 	# Display state and time
 	my $pos = $madjack->get_position();
-	printf("%s [%1.1f]                  \r", $state, $pos);
+	printf("%s [%s/%s]                  \r", $state, min_sec($pos), min_sec($duration));
 }
 
 
 # Restore terminate settings
 ReadMode(0);
+
+
+sub min_sec {
+	my ($secs) = @_;
+	
+	my $min = floor($secs / 60);
+	my $sec = ($secs - ($min*60));
+	
+	return sprintf("%d:%1.1f", $min, $sec);
+}
 

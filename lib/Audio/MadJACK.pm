@@ -14,7 +14,7 @@ use strict;
 
 use vars qw/$VERSION $ATTEMPTS/;
 
-$VERSION="0.03";
+$VERSION="0.04";
 $ATTEMPTS=5;
 
 
@@ -27,8 +27,10 @@ sub new {
     my $self = { 
     	pong => 0,
     	state => undef,
+    	version => undef,
+    	error => undef,
+    	duration => undef,
     	position => undef,
-    	filename => undef,
     	filepath => undef
     };
     bless $self, $class;
@@ -49,9 +51,11 @@ sub new {
     
     # Add reply handlers
     $self->{lo}->add_method( '/deck/state', 's', \&_state_handler, $self );
+    $self->{lo}->add_method( '/deck/duration', 'd', \&_duration_handler, $self );
     $self->{lo}->add_method( '/deck/position', 'd', \&_position_handler, $self );
-    $self->{lo}->add_method( '/deck/filename', 's', \&_filename_handler, $self );
     $self->{lo}->add_method( '/deck/filepath', 's', \&_filepath_handler, $self );
+    $self->{lo}->add_method( '/version', 'ss', \&_version_handler, $self );
+    $self->{lo}->add_method( '/error', 's', \&_error_handler, $self );
     $self->{lo}->add_method( '/pong', '', \&_pong_handler, $self );
     
     # Check MadJACK server is there
@@ -65,8 +69,8 @@ sub new {
 
 sub load {
 	my $self=shift;
-	my ($filename) = @_;
-	return $self->_send( '/deck/load', 'LOADING|READY|ERROR', 's', $filename);
+	my ($filepath) = @_;
+	return $self->_send( '/deck/load', 'LOADING|READY|ERROR', 's', $filepath);
 }
 
 
@@ -87,7 +91,12 @@ sub stop {
 
 sub cue {
 	my $self=shift;
-	return $self->_send( '/deck/cue', 'LOADING|READY');
+	my ($cuepoint) = @_;
+	if (defined $cuepoint) {
+		return $self->_send( '/deck/cue', 'LOADING|READY', 'd', $cuepoint);
+	} else {
+		return $self->_send( '/deck/cue', 'LOADING|READY');
+	}
 }
 
 sub eject {
@@ -109,6 +118,19 @@ sub _state_handler {
 	return 0; # Success
 }
 
+sub get_duration {
+	my $self=shift;
+	$self->{duration} = undef;
+	$self->_wait_reply( '/deck/get_duration' );
+	return $self->{duration};
+}
+
+sub _duration_handler {
+	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
+	$userdata->{duration}=$params[0];
+	return 0; # Success
+}
+
 sub get_position {
 	my $self=shift;
 	$self->{postion} = undef;
@@ -122,19 +144,6 @@ sub _position_handler {
 	return 0; # Success
 }
 
-sub get_filename {
-	my $self=shift;
-	$self->{filename} = undef;
-	$self->_wait_reply( '/deck/get_filename' );
-	return $self->{filename};
-}
-
-sub _filename_handler {
-	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
-	$userdata->{filename}=$params[0];
-	return 0; # Success
-}
-
 sub get_filepath {
 	my $self=shift;
 	$self->{filepath} = undef;
@@ -145,6 +154,33 @@ sub get_filepath {
 sub _filepath_handler {
 	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
 	$userdata->{filepath}=$params[0];
+	return 0; # Success
+}
+
+sub get_version {
+	my $self=shift;
+	$self->{version} = undef;
+	$self->_wait_reply( '/get_version' );
+	return $self->{version};
+}
+
+sub _version_handler {
+	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
+	$userdata->{version}=$params[0].'/'.$params[1];
+	return 0; # Success
+}
+
+
+sub get_error {
+	my $self=shift;
+	$self->{error} = undef;
+	$self->_wait_reply( '/get_error' );
+	return $self->{error};
+}
+
+sub _error_handler {
+	my ($serv, $mesg, $path, $typespec, $userdata, @params) = @_;
+	$userdata->{error}=$params[0];
 	return 0; # Success
 }
 
@@ -181,8 +217,12 @@ sub _send {
 		warn "Warning: failed to send '$path' OSC message.\n" if ($result<1);
 
 		# Check what state the player is in now
-		$state = $self->get_state();
-		last if ($state =~ /^$desired$/i);
+		if (defined $desired) {
+			$state = $self->get_state();
+			last if ($state =~ /^$desired$/i);
+		} else {
+			return 0;
+		}
 	}
 	
 	# Finally return true if we are in desired state
@@ -260,9 +300,9 @@ Connect to MadJACK deck specified by C<oscurl>.
 A ping is sent to the MadJACK deck to check to see if it is there.
 If a reply is not recieved or there was an error then C<undef> is returned.
 
-=item B<load( filename )>
+=item B<load( filepath )>
 
-Send a message to the deck requesting that C<filename> is loaded.
+Send a message to the deck requesting that C<filepath> is loaded.
 Note: it is up to the developer to check to see if the file was 
 successfully loaded, by calling the C<get_state()> method.
 
@@ -286,9 +326,12 @@ Tell the deck to stop decoding and playback of the current track.
 
 Returns 1 if command was successfully received or 0 on error.
 
-=item B<cue()>
+=item B<cue( [$cuepoint] )>
 
-Tell the deck to start decoding from the cue point.
+Tell the deck to start decoding from C<$cuepoint>, which 
+is the position in the track in seconds. If no C<$cuepoint>
+is specified, the the deck will start decoding from the start 
+of the track.
 
 Returns 1 if command was successfully received or 0 on error.
 
@@ -314,19 +357,25 @@ Returns one of the following strings:
 If no reply if received from the server or there is an error then 
 C<undef> is returned.
 
-=item B<get_position()>
+=item B<get_error()>
 
-Returns the deck's position (in seconds) in the current track. 
+Returns the a string describing the current error (if state is ERROR).
+
+=item B<get_version()>
+
+Returns the version number of the MadJACK server.
+
+=item B<get_duration()>
+
+Returns the durtion (in seconds) of the current track. 
    
 If no reply if received from the server or there is an error then 
 C<undef> is returned.
 
-=item B<get_filename()>
+=item B<get_position()>
 
-Returns the filename of the track currently loaded in the deck.
-The filename is stripped of its path and suffix.
-
-If no track is currently loaded then an empty string is returned.
+Returns the deck's position (in seconds) in the current track. 
+   
 If no reply if received from the server or there is an error then 
 C<undef> is returned.
 

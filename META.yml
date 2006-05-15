@@ -1,6 +1,6 @@
 ---
 name: Audio-MadJACK
-version: 0.03
+version: 0.04
 author:
   - Nicholas J. Humfrey <njh@aelius.com>
 abstract: Talk to MadJACK server using Object Oriented Perl
@@ -13,5 +13,5 @@ build_requires:
 provides:
   Audio::MadJACK:
     file: lib/Audio/MadJACK.pm
-    version: 0.03
+    version: 0.04
 generated_by: Module::Build version 0.2611
